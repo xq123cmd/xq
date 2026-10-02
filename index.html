@@ -137,6 +137,23 @@
     /* 防 iOS 聚焦输入框时自动放大页面 */
     input[type=text],input[type=password],select{font-size:16px}
   }
+
+  /* ===== 分页条 ===== */
+  .pager{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px;margin:18px 0 6px}
+  .pager .p-info{font-size:13px;color:var(--text-sub);margin-right:4px}
+  .pager button{
+    min-width:34px;height:34px;padding:0 8px;border-radius:9px;border:1px solid #e3dff2;
+    background:#fff;color:var(--text);font-size:14px;cursor:pointer;transition:.15s;font-family:inherit;
+  }
+  .pager button:hover:not(:disabled){border-color:var(--primary);color:var(--primary)}
+  .pager button.cur{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+  .pager button:disabled{opacity:.35;cursor:default}
+  .pager .dots{color:var(--text-sub);padding:0 2px;user-select:none}
+  .pager .p-size{display:flex;align-items:center;gap:6px;margin-left:10px;font-size:13px;color:var(--text-sub)}
+  .pager .p-size select{
+    padding:6px 8px;border-radius:9px;border:1px solid #e3dff2;background:#fff;
+    font-size:14px;color:var(--text);cursor:pointer;font-family:inherit;
+  }
 </style>
 </head>
 <body>
@@ -209,7 +226,7 @@
   </section>
 
   <!-- ===== 图库 ===== -->
-  <section class="card">
+  <section class="card gallery-sec">
     <div class="gal-head">
       <h2 style="margin:0">🗂️ 图库 <span class="tag" id="galCount">共 0 个文件</span></h2>
       <div class="linktype">
@@ -222,6 +239,7 @@
       </div>
     </div>
     <div id="gallery"><div class="empty"><div class="ico">☁️</div>图库还是空的<br>配置好 Token 后上传第一个文件吧</div></div>
+    <div class="pager" id="pager"></div>
   </section>
 
   <!-- ===== 使用说明 ===== -->
@@ -502,6 +520,7 @@ async function handleFiles(fileList){
     try{
       const info = await uploadOne(f, item);
       galleryFiles.unshift(info);
+      pageNum = 1;   // 新图插在最前面，跳回第一页立即可见
       item.classList.add('done');
       st.className = 'st ok'; st.textContent = '成功 ✓';
       const bar = item.querySelector('.bar i'); if (bar) bar.style.width = '100%';
@@ -547,12 +566,18 @@ function previewHTML(f){
 
 function renderGallery(){
   const g = $('gallery');
-  $('galCount').textContent = `共 ${galleryFiles.length} 个文件`;
-  if (!galleryFiles.length){
+  const total = galleryFiles.length;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (pageNum > pages) pageNum = pages;   // 删除后当前页变空时自动回退
+  $('galCount').textContent = `共 ${total} 个文件` + (pages > 1 ? ` · 第 ${pageNum}/${pages} 页` : '');
+  if (!total){
     g.innerHTML = '<div class="empty"><div class="ico">☁️</div>图库还是空的<br>配置好 Token 后上传第一个文件吧</div>';
+    renderPager();
     return;
   }
-  g.innerHTML = galleryFiles.map(f => `
+  const start = (pageNum - 1) * pageSize;
+  const slice = galleryFiles.slice(start, start + pageSize);
+  g.innerHTML = slice.map(f => `
     <div class="g-card" data-sha="${f.sha}">
       <div class="thumb">${previewHTML(f)}</div>
       <div class="g-body">
@@ -566,6 +591,52 @@ function renderGallery(){
         </div>
       </div>
     </div>`).join('');
+  renderPager();
+}
+
+/* ---------------- 分页 ---------------- */
+const PAGE_SIZE_KEY = 'gh_image_host_page_size';
+let pageSize = parseInt(localStorage.getItem(PAGE_SIZE_KEY)) || 30;
+let pageNum = 1;
+
+function goPage(n){
+  const pages = Math.max(1, Math.ceil(galleryFiles.length / pageSize));
+  pageNum = Math.min(Math.max(1, n), pages);
+  renderGallery();
+  document.querySelector('.gallery-sec').scrollIntoView({behavior:'smooth'});
+}
+function setPageSize(sel){
+  pageSize = parseInt(sel.value);
+  localStorage.setItem(PAGE_SIZE_KEY, pageSize);
+  pageNum = 1;
+  renderGallery();
+}
+function renderPager(){
+  const p = $('pager');
+  const total = galleryFiles.length;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (pages <= 1){
+    p.innerHTML = total ? '' : '';
+    return;
+  }
+  const btn = (n, label, dis, cur) =>
+    `<button ${dis ? 'disabled' : ''} ${cur ? 'class="cur"' : ''} onclick="goPage(${n})">${label || n}</button>`;
+  let html = btn(1, '«', pageNum === 1, false) + btn(pageNum - 1, '‹', pageNum === 1, false);
+  const win = [];
+  for (let n = Math.max(1, pageNum - 2); n <= Math.min(pages, pageNum + 2); n++) win.push(n);
+  if (win[0] > 2) html += `<span class="dots">…</span>`;
+  else if (win[0] === 2) html += btn(1);
+  win.forEach(n => html += btn(n, n, false, n === pageNum));
+  if (win[win.length - 1] < pages - 1) html += `<span class="dots">…</span>`;
+  else if (win[win.length - 1] === pages - 1) html += btn(pages);
+  html += btn(pageNum + 1, '›', pageNum === pages, false) + btn(pages, '»', pageNum === pages, false);
+  html += `<span class="p-size">每页
+    <select onchange="setPageSize(this)">
+      <option value="30"${pageSize===30?' selected':''}>30</option>
+      <option value="50"${pageSize===50?' selected':''}>50</option>
+      <option value="100"${pageSize===100?' selected':''}>100</option>
+    </select>张</span>`;
+  p.innerHTML = html;
 }
 
 function cardOf(btn){ return btn.closest('.g-card'); }
