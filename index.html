@@ -287,7 +287,7 @@
 <script>
 /* ================== 在这里修改你的默认配置（也可在页面顶部设置区修改） ================== */
 const GITHUB_USERNAME = 'xq123cmd';  // ← 你的 GitHub 用户名
-const GITHUB_REPO     = 'xq';        // ← 你的仓库名
+const GITHUB_REPOS_DEFAULT = ['xq', 'xq2'];  // ← 内置图床列表（自动出现在切换下拉框，谁打开都在）
 const GITHUB_BRANCH   = 'main';  // ← 分支，一般不用改
 const DEFAULT_LINK    = 'io';    // ← 默认外链格式：'io'=github.io / 'raw' / 'jsd'
 /* ====================================================================================== */
@@ -307,11 +307,11 @@ function $(id){ return document.getElementById(id); }
 function loadCfg(){
   let c = {};
   try{ c = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); }catch(e){}
-  /* v1 旧配置 {repo:单个} 自动迁移为 v2 {repos:列表} */
-  const repos = Array.isArray(c.repos) && c.repos.filter(Boolean).length
-    ? c.repos.filter(Boolean)
-    : (c.repo ? [c.repo] : (GITHUB_REPO ? [GITHUB_REPO] : []));
-  const repo = (c.repo && repos.includes(c.repo)) ? c.repo : (repos[0] || '');
+  /* v1 旧配置 {repo:单个} 自动迁移；内置图床（xq/xq2）始终出现在列表里 */
+  const userRepos = Array.isArray(c.repos) ? c.repos.filter(Boolean) : [];
+  if (c.repo && !userRepos.includes(c.repo)) userRepos.push(c.repo);
+  const repos = [...new Set([...GITHUB_REPOS_DEFAULT, ...userRepos])];
+  const repo = repos.includes(c.repo) ? c.repo : repos[0];
   return {
     token : c.token  || '',
     user  : c.user   || GITHUB_USERNAME,
@@ -436,6 +436,7 @@ function addRepo(){
   if (ready()) refreshGallery(true);
 }
 function removeCurrentRepo(){
+  if (GITHUB_REPOS_DEFAULT.includes(cfg.repo)) return toast(`「${cfg.repo}」是内置图床，不能移除`, 'fail');
   if (cfg.repos.length <= 1) return toast('至少保留一个仓库', 'fail');
   if (!confirm(`把「${cfg.repo}」从切换列表移除？\n（GitHub 上的仓库和已传的图不受影响，只是不在本页显示）`)) return;
   cfg.repos = cfg.repos.filter(r => r !== cfg.repo);
