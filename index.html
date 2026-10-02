@@ -84,6 +84,9 @@
   .gal-head .count{font-size:13px;color:var(--text-sub)}
   .linktype{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-sub)}
   .linktype select{width:auto;padding:6px 10px;font-size:13px}
+  .linktype .lbl{white-space:nowrap}
+  .repo-manage{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .repo-manage select{flex:1;min-width:90px}
   #gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:16px}
   .g-card{background:#fff;border:1px solid #eee9fb;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;transition:.2s}
   .g-card:hover{box-shadow:0 6px 20px rgba(108,92,231,.14);transform:translateY(-2px)}
@@ -187,9 +190,17 @@
           <span></span>
         </div>
         <div class="cfg-row">
-          <label>仓库名</label>
-          <input type="text" id="cfgRepo" placeholder="仓库名，如 yan">
+          <label>图床仓库</label>
+          <div class="repo-manage">
+            <select id="cfgRepoSel" onchange="onRepoSelChange()"></select>
+            <button class="btn btn-ghost" onclick="removeCurrentRepo()" title="只是从切换列表移除，不删除 GitHub 上的仓库">移除</button>
+          </div>
           <span></span>
+        </div>
+        <div class="cfg-row">
+          <label>添加仓库</label>
+          <input type="text" id="cfgRepoNew" placeholder="新仓库名（需已建好并开 Pages）">
+          <button class="btn btn-primary" onclick="addRepo()">＋添加</button>
         </div>
         <div class="cfg-row">
           <label>分支</label>
@@ -230,7 +241,9 @@
     <div class="gal-head">
       <h2 style="margin:0">🗂️ 图库 <span class="tag" id="galCount">共 0 个文件</span></h2>
       <div class="linktype">
-        链接格式
+        <span class="lbl">📦 图床</span>
+        <select id="repoSel" onchange="switchRepo(this.value)"></select>
+        <span class="lbl">🔗 格式</span>
         <select id="linkSel" onchange="onLinkTypeChange()">
           <option value="io">github.io</option>
           <option value="raw">raw</option>
@@ -252,6 +265,7 @@
         <li><b>拿外链</b>：图库卡片上点「复制」即可，格式 <code>https://用户名.github.io/仓库名/文件名</code>。</li>
       </ol>
       💡 <b>手机强烈建议</b>：浏览器菜单里选「<b>添加到主屏幕</b>」，以后从桌面图标直接打开，和 App 一样用。<br>
+      💡 <b>多图床</b>：一个仓库快装满时，去 GitHub 再建一个新仓库（记得开 Pages），然后在设置区「添加仓库」，之后用图库右上角的下拉框一键切换。<br>
       💡 小提示：重名文件会自动加时间戳后缀，不会覆盖旧图；iPhone 拍的照片会自动转成 jpg 再上传。<br>
       ⚠️ 不要清除浏览器网站数据，否则 Token 要重新填一次。Token 获取：<a href="https://github.com/settings/tokens" target="_blank">github.com/settings/tokens</a>（classic，勾 <b>repo</b>）。
     </div>
@@ -293,10 +307,16 @@ function $(id){ return document.getElementById(id); }
 function loadCfg(){
   let c = {};
   try{ c = JSON.parse(localStorage.getItem(LS_KEY) || '{}'); }catch(e){}
+  /* v1 旧配置 {repo:单个} 自动迁移为 v2 {repos:列表} */
+  const repos = Array.isArray(c.repos) && c.repos.filter(Boolean).length
+    ? c.repos.filter(Boolean)
+    : (c.repo ? [c.repo] : (GITHUB_REPO ? [GITHUB_REPO] : []));
+  const repo = (c.repo && repos.includes(c.repo)) ? c.repo : (repos[0] || '');
   return {
     token : c.token  || '',
     user  : c.user   || GITHUB_USERNAME,
-    repo  : c.repo   || GITHUB_REPO,
+    repos,
+    repo,
     branch: c.branch || GITHUB_BRANCH,
     link  : c.link   || DEFAULT_LINK
   };
@@ -357,11 +377,17 @@ function onLinkTypeChange(){
 function fillCfgForm(){
   $('cfgToken').value  = cfg.token;
   $('cfgUser').value   = cfg.user;
-  $('cfgRepo').value   = cfg.repo;
+  fillRepoSels();
   $('cfgBranch').value = cfg.branch;
   $('cfgLink').value   = cfg.link;
   $('linkSel').value   = cfg.link;
   updateRepoLine();
+}
+function fillRepoSels(){
+  ['cfgRepoSel','repoSel'].forEach(id => {
+    const sel = $(id);
+    sel.innerHTML = cfg.repos.map(r => `<option value="${r}"${r===cfg.repo?' selected':''}>${r}</option>`).join('');
+  });
 }
 function updateRepoLine(){
   if (cfg.user && cfg.repo) {
@@ -371,16 +397,54 @@ function updateRepoLine(){
 function saveCfg(){
   const token = $('cfgToken').value.trim();
   const user  = $('cfgUser').value.trim();
-  const repo  = $('cfgRepo').value.trim();
   const branch= $('cfgBranch').value.trim() || 'main';
   const link  = $('cfgLink').value;
   if (!token) return toast('请先填写 Token', 'fail');
-  if (!user || !repo) return toast('请填写用户名和仓库名', 'fail');
-  saveCfgSilent({ token, user, repo, branch, link });
+  if (!user) return toast('请填写用户名', 'fail');
+  if (!cfg.repos.length || !cfg.repo) return toast('请先添加一个图床仓库', 'fail');
+  saveCfgSilent({ token, user, branch, link });
   $('linkSel').value = link;
   updateRepoLine();
   toast('设置已保存 ✓', 'ok');
   refreshGallery(true);
+}
+
+/* ---------------- 多仓库切换 ---------------- */
+function onRepoSelChange(){ switchRepo($('cfgRepoSel').value); }
+async function switchRepo(repo){
+  if (!repo || repo === cfg.repo) return;
+  saveCfgSilent({ repo });
+  fillRepoSels();
+  updateRepoLine();
+  pageNum = 1;
+  galleryFiles = [];
+  renderGallery();
+  toast(`已切换到图床「${repo}」`, 'ok');
+  if (ready()) refreshGallery(true);
+}
+function addRepo(){
+  const name = $('cfgRepoNew').value.trim().replace(/^\/+|\/+$/g,'');
+  if (!name) return toast('请输入仓库名', 'fail');
+  if (cfg.repos.includes(name)) return toast('列表里已经有这个仓库了', 'fail');
+  cfg.repos.push(name);
+  saveCfgSilent({ repos: cfg.repos, repo: name });
+  $('cfgRepoNew').value = '';
+  fillRepoSels();
+  updateRepoLine();
+  pageNum = 1; galleryFiles = []; renderGallery();
+  toast(`已添加并切换到「${name}」`, 'ok');
+  if (ready()) refreshGallery(true);
+}
+function removeCurrentRepo(){
+  if (cfg.repos.length <= 1) return toast('至少保留一个仓库', 'fail');
+  if (!confirm(`把「${cfg.repo}」从切换列表移除？\n（GitHub 上的仓库和已传的图不受影响，只是不在本页显示）`)) return;
+  cfg.repos = cfg.repos.filter(r => r !== cfg.repo);
+  saveCfgSilent({ repos: cfg.repos, repo: cfg.repos[0] });
+  fillRepoSels();
+  updateRepoLine();
+  pageNum = 1; galleryFiles = []; renderGallery();
+  toast(`已移除，当前图床：${cfg.repo}`, 'ok');
+  if (ready()) refreshGallery(true);
 }
 function ready(){
   return !!(cfg.token && cfg.user && cfg.repo);
