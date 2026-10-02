@@ -91,7 +91,7 @@
   .g-card{background:#fff;border:1px solid #eee9fb;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;transition:.2s}
   .g-card:hover{box-shadow:0 6px 20px rgba(108,92,231,.14);transform:translateY(-2px)}
   .thumb{height:158px;background:
-    repeating-conic-gradient(#f6f4fc 0 25%,#fff 0 50%) 0 0/18px 18px;
+    repeating-conic-gradient(#e6e1f4 0 25%,#faf9fe 0 50%) 0 0/18px 18px;
     display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
   .thumb img{width:100%;height:100%;object-fit:contain}
   .thumb .err{font-size:32px;opacity:.45}
@@ -472,10 +472,45 @@ async function listFiles(){
   const data = await res.json().catch(()=>({}));
   if (!res.ok) throw new Error(apiErrText(res.status, data));
   if (!Array.isArray(data)) throw new Error('返回数据异常');
-  return data
+  const files = data
     .filter(f => f.type === 'file' && !HIDE_FILES.includes(f.name.toLowerCase()))
     .filter(f => kindOf(f.name))
     .map(f => ({ name: f.name, sha: f.sha, download_url: f.download_url, size: f.size, ext: extOf(f.name), kind: kindOf(f.name) }));
+  return sortNewestFirst(files);
+}
+
+/* ---------------- 排序：新传的图永远在最前面 ---------------- */
+/* 上传时间表（localStorage）记录本页传过的文件；没记录的按文件名倒序兜底
+   （Time_1790943... 这类时间戳文件名天然可排）。GitHub API 只会按字母序返回，
+   不排序的话新图会沉到最后一页——这就是"刷新后图不见了"的原因。 */
+const UPLOADED_TS_KEY = 'gh_image_host_uploaded_ts_v1';
+function getUploadedMap(){
+  try{ return JSON.parse(localStorage.getItem(UPLOADED_TS_KEY) || '{}'); }catch(e){ return {}; }
+}
+function rememberUpload(name, ts){
+  const m = getUploadedMap();
+  m[name] = ts || Date.now();
+  /* 控制体积：只留最近 2000 条 */
+  const keys = Object.keys(m);
+  if (keys.length > 2000){
+    keys.sort((a,b) => m[a] - m[b]);
+    keys.slice(0, keys.length - 2000).forEach(k => delete m[k]);
+  }
+  localStorage.setItem(UPLOADED_TS_KEY, JSON.stringify(m));
+}
+function sortNewestFirst(files){
+  const tsMap = getUploadedMap();
+  const known = [], unknown = [];
+  files.forEach(f => (tsMap[f.name] ? known : unknown).push(f));
+  known.sort((a,b) => tsMap[b.name] - tsMap[a.name]);   // 有上传记录：按时间新→旧
+  unknown.sort((a,b) => b.name.localeCompare(a.name, 'en', {numeric:true})); // 无记录：按名倒序
+  /* 清理已删除文件的时间记录 */
+  const names = new Set(files.map(f => f.name));
+  const m = getUploadedMap();
+  let dirty = false;
+  Object.keys(m).forEach(k => { if (!names.has(k)){ delete m[k]; dirty = true; } });
+  if (dirty) localStorage.setItem(UPLOADED_TS_KEY, JSON.stringify(m));
+  return known.concat(unknown);
 }
 
 /* base64（分块，避免大文件栈溢出） */
@@ -541,13 +576,15 @@ async function uploadOne(file, item){
     } else throw e;
   }
   const c = resp.content || {};
+  const finalName = c.name || filename;
+  rememberUpload(finalName, Date.now());   // 记下上传时间，刷新后仍排在最前
   return {
-    name: c.name || filename,
+    name: finalName,
     sha: c.sha,
-    download_url: c.download_url || makeLink(c.name || filename),
+    download_url: c.download_url || makeLink(finalName),
     size: file.size,
-    ext: extOf(c.name || filename),
-    kind: kindOf(c.name || filename)
+    ext: extOf(finalName),
+    kind: kindOf(finalName)
   };
 }
 
@@ -620,7 +657,7 @@ function attrEscape(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&qu
 
 function previewHTML(f){
   if (f.kind === 'img'){
-    return `<img src="${attrEscape(makeLink(f.name))}" data-fb="${attrEscape(f.download_url || '')}" loading="lazy" alt="${attrEscape(f.name)}" onerror="imgFallback(this)">`;
+    return `<img src="${attrEscape(makeLink(f.name))}" data-fb="${attrEscape(f.download_url || '')}" decoding="async" alt="${attrEscape(f.name)}" onerror="imgFallback(this)">`;
   }
   if (f.kind === 'audio'){
     return `<div class="audio-ico">🎵</div><audio controls preload="none" src="${attrEscape(makeLink(f.name))}" data-fb="${attrEscape(f.download_url || '')}" onerror="audioFallback(this)"></audio>`;
